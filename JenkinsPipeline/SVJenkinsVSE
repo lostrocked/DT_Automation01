@@ -1,0 +1,547 @@
+//SV-Ephemeral-VSE-07
+//Pipeline to Create Ephemeral Docker-Compose Virtual Service Environment (VSE and Deploy Virtual Services From Mar file, Runn Application Tests then stages to undeploy and stop Virtual Services and finally stages to stop and remove Container VSE
+// Tested in windows and Linux Jenkins instances
+node {
+    
+// Variables change per environment- These could become parameters
+	def devTestServer = '10.252.213.144'
+	def vseServer = 'VSE'
+	def containerName = vseServer.toLowerCase()
+	def serviceName = 'Demo-Accounts-Risk-DC, Demo-Accounts-DC'
+	def vsMarFile = 'VirtualServices/Demo-Accounts-Risk-DC.mar,VirtualServices/Demo-Accounts-DC.mar'
+	def serviceDesc = 'Service From SWAGGER and RR Pairs'
+	def swaggerFile1 = '**/Swagger/accounts-swagger.json'
+	def configFile = '**/config/SwaggerConfig02.json'
+	def rrFile = '**/Data/Zipfiles/RRPairsAccountsFP.zip'
+	def testFileMar = 'Tests/Test-Accounts-Risk-Ephem.mar'
+	def testFileMar2 = 'Tests/Test-Accounts-Ephem.mar'
+	def testConfig = 'config/Test-Accounts-Risk-EphemVSE.config'
+	def svPluginPort = '1505'
+	def vsmFile = 'Vsm-Vsi/Demo-Accounts-Risk.vsm'
+	def vsiFile = 'Vsm-Vsi/Demo-Accounts-Risk.vsi'
+	def dockerHost = '10.252.213.103'
+	def dockerAPIPort = '2375'
+	def createVSEBody = '{"Hostname": "","Domainname": "","User": "","AttachStdin": false,"AttachStdout": true,"AttachStderr": true,"Tty": false,"OpenStdin": false,"StdinOnce": false,"Env": [],"Image": "sv-docker.packages.broadcom.com/sv/lisa:10.7.2.1859", "Cmd": [ "VSE", "-m", "tcp://10.252.213.144:2010/Registry", "-n", "tcp://10.252.213.103:20109/EPHEMVSE3"],"ExposedPorts": {"20109/tcp": {},"1505/tcp": {},"1528/tcp": {},"1534/tcp": {},"2009-2011/tcp": {},"2051/tcp": {},"2013/tcp": {},"2014/tcp": {},"10150/tcp": {},"10151/tcp": {},"10152/tcp": {},"10153/tcp": {},"10154/tcp": {},"10155/tcp": {},"10156/tcp": {},"20010/tcp": {},"20011/tcp": {}},  "HostConfig": { "PortBindings": {	 "20109/tcp": [{"HostPort": "20109"}],"10150/tcp": [{"HostPort": "10150"}],"10151/tcp": [{"HostPort": "10151"}],"10152/tcp": [{"HostPort": "10152"}],"10153/tcp": [{"HostPort": "10153"}],"10154/tcp": [{"HostPort": "10154"}],"10155/tcp": [{"HostPort": "10155"}],"10156/tcp": [{"HostPort": "10156"}],"20010/tcp": [{"HostPort": "20010"}],"20011/tcp": [{"HostPort": "20011"}]   }  }}'
+
+// This is the credential ID stored in each Jenkins instance 
+// You will need to change this to your Credential ID
+	def myCredentialID = '2b25938d-796e-43ba-811d-d99a4d531a13'
+	
+	//basic Auth for default DevTest admin user
+	def basicAuth = 'Basic YWRtaW46YWRtaW4='
+	def basicAdmin = 'Basic YWRtaW46YWRtaW4='
+
+	def sleepTime = '10'
+	def sleepTimeTest = '15'
+// Variable for Container ID	
+	def cID = '0'
+	
+// Calculated Variables based on parameters
+		def marFile = ''
+		def strMar = []
+		def marFileCnt = vsMarFile.count(",")
+		if (marFileCnt > 0) {
+			strMar = vsMarFile.split(',')
+			marFileCnt = strMar.size()
+		}
+		else {
+			strMar.add(vsMarFile)
+			marFileCnt = 1
+		}
+		echo 'marFileCnt =  ' + marFileCnt
+		echo 'strMar =  ' + strMar[0]
+		def vsName = ''
+		def strVS = []
+		def vsCnt = serviceName.count(",")
+		if (vsCnt > 0) {
+			strVS = serviceName.split(',')
+			vsCnt = strVS.size()
+		}
+		else {
+			strVS.add(serviceName)
+			vsCnt = 1
+		}
+		echo 'vsCnt =  ' + vsCnt
+		echo 'strVS =  ' + strVS[0]
+
+
+ 
+	stage('Retrieve files including SWAGGER, Config, VSM, VSI and RRPairs from Github') {
+	// Git Project downloaded to workspace
+		git credentialsId: 'dd8dade7-879b-45c1-ac63-b1972f3a6a62', url: 'https://github.com/lostrocked/DT_Automation01'
+	}
+	
+	stage('Create Container VSE') {
+		//echo "createVSEBody: $createVSEBody"
+		// For Windows you must have the "  replaced with \"  also the cUrl command -d has to have the format -d "${createVSEBody2}" 
+		def createVSEBody2 = createVSEBody.replaceAll(/(")/, /\\$0/)
+		//echo "createVSEBody2: $createVSEBody2"
+
+       // def rspDvse = httpRequest consoleLogResponseBody: true, customHeaders: [[maskValue: false, name: 'Content-Type', value: 'application/json']], httpMode: 'POST', requestBody: """${createVSEBody}""", responseHandle: 'NONE', url: //"""http://${dockerHost}:${dockerAPIPort}/v1.42/containers/create?name=${containerName}""", wrapAsMultipart: false
+	//	echo 'Response rspBuilder= ' + rspDvse.content
+	//	def jsonBuilder = readJSON text: rspDvse.content
+	//	cId = jsonBuilder.Id
+		script { 
+			String jsonRsp = ""
+			String rspCode = ""
+			String url = """ -X POST  -H \"Content-Type: application/json\" -H \"accept: application/json\" "http://${dockerHost}:${dockerAPIPort}/v1.42/containers/create?name=${containerName}"  -d "${createVSEBody2}" """
+			if (isUnix()){
+				// Linux / Mac
+				echo "Linux String url:  $url"
+				def (String response, String code) = sh(script: """curl --silent --write-out \"\n%{http_code}\" $url""", returnStdout: true).trim().tokenize("\n")
+				jsonRsp = response;
+				//echo "jsonRsp = " + jsonRsp
+				rspCode = code.toString();
+			}
+			else {
+				// Windows curl 7.79.1 (Windows) libcurl/7.79.1 Schannel
+				echo "Windows String url:  $url"
+				// Window curl breaks down the return into 3 parts vs Linux 2 parts
+				def (String command, String response, String code) = bat(script: """curl --silent --write-out \"\\n%%{http_code}\" $url """, returnStdout: true).trim().tokenize("""\n""")
+				jsonRsp = response;
+				rspCode = code.toString();
+			}
+			if (rspCode.toInteger() >= 200 && rspCode.toInteger() < 300) {
+				echo "HTTP response status code: $rspCode"
+				def jsonBuilder = readJSON text: jsonRsp
+				cId = jsonBuilder.Id
+				echo "Container: $cId"
+			}
+			else {
+			//Fail Here
+				echo "ERROR - HTTP response status code: $rspCode"
+			}
+		}
+		//End Script
+
+				sleep sleepTimeTest.toInteger() 
+
+
+	}
+//End Stage
+
+	stage('Start Container VSE') {
+
+
+        //def rspStartVse = httpRequest consoleLogResponseBody: true, customHeaders: [[maskValue: false, name: 'Content-Type', value: 'application/json']], httpMode: 'POST', responseHandle: 'NONE', url: //"""http://${dockerHost}:${dockerAPIPort}/v1.42/containers/${cId}/start""", wrapAsMultipart: false
+		//echo 'Response status= ' + rspStartVse.status
+		///For Docker container start/stop commands you do not get a response you only get a code
+		script { 
+			String jsonRsp = ""
+			String rspCode = ""
+			String url = """ -X POST  -H \"Content-Type: application/json\" -H \"accept: application/json\" "http://${dockerHost}:${dockerAPIPort}/v1.42/containers/${cId}/start"  """
+			if (isUnix()){
+				// Linux / Mac
+				echo "Linux String url:  $url"
+				//def (String response, String code) = sh(script: """curl --silent --write-out \"\n%{http_code}\" $url""", returnStdout: true).trim().tokenize("\n")
+				def (String response) = sh(script: """curl --silent --write-out \"\n%{http_code}\" $url""", returnStdout: true).trim().tokenize("\n")
+				///echo response
+				rspCode = response;
+			}
+			else {
+				// Windows curl 7.79.1 (Windows) libcurl/7.79.1 Schannel
+				echo "Windows String url:  $url"
+				// Window curl breaks down the return into 3 parts vs Linux 2 parts
+				def (String command, String response) = bat(script: """curl --silent --write-out \"\\n%%{http_code}\" $url """, returnStdout: true).trim().tokenize("""\n""")
+				rspCode = response;
+			}
+			if (rspCode.toInteger() >= 200 && rspCode.toInteger() < 300) {
+				echo "HTTP response status code: $rspCode"
+			}
+			else {
+			//Fail Here
+				echo "ERROR - HTTP response status code: $rspCode"
+			}
+		}
+		//End Script
+
+
+	}
+//End Stage
+
+  stage('Get VSEs') {
+ 
+	// Use REST API
+		script { 
+			String jsonRsp = ""
+			String rspCode = ""
+			String url = """ -X GET "http://${devTestServer}:${svPluginPort}/lisa-virtualize-invoke/api/v3/vses?status=Active&sortBy=VseName&sortOrder=ASC" -H \"accept: application/json\" -H \"authorization: ${basicAdmin}\" """
+			if (isUnix()){
+				// Linux / Mac
+			//	echo "Linux String url:  $url"
+				def (String response, String code) = sh(script: """curl --silent --write-out \"\n%{http_code}\" $url""", returnStdout: true).trim().tokenize("\n")
+				///echo response
+				jsonRsp = response;
+				//echo "jsonRsp = " + jsonRsp
+				rspCode = code.toString();
+				//echo "HTTP response status code: $rspCode"
+			}
+			else {
+				// Windows curl 7.79.1 (Windows) libcurl/7.79.1 Schannel
+				//echo "Windows String url:  $url"
+				// Window curl breaks down the return into 3 parts vs Linux 2 parts
+				def (String command, String response, String code) = bat(script: """curl --silent --write-out \"\\n%%{http_code}\" $url""", returnStdout: true).trim().tokenize("""\n""")
+				//echo response
+				jsonRsp = response;
+				//echo "jsonRsp = " + jsonRsp
+				rspCode = code.toString();
+			//	echo "HTTP response status code: $rspCode"
+			}
+			if (rspCode.toInteger() >= 200 && rspCode.toInteger() < 300) {
+				echo "HTTP response status code: $rspCode"
+				def jsonBuilder = readJSON text: jsonRsp
+				vseCount = jsonBuilder.totalVSEsCount
+				vseName01 = jsonBuilder.vseList[0].name
+				echo "Total Number of VSEs: $vseCount"
+				echo "First VSE name: $vseName01"
+			}
+			else {
+			//Fail Here
+				echo "ERROR - HTTP response status code: $rspCode"
+			}
+		}
+		//End Script
+	}
+//End Stage
+
+
+
+  stage('Deploy Virtual Service(s)') {
+    sleep sleepTimeTest.toInteger() // seconds
+    sleep sleepTimeTest.toInteger() // seconds
+	//svDeployVirtualService host: """${devTestServer}""", marFilesPaths: """${vsMarFile}""", port: """${svPluginPort}""", secured: false, tokenCredentialId: """${myCredentialID}""", useCustomRegistry: true, vseName: """${vseServer}"""
+
+	// Deploy using REST API
+	
+		//handle multiple mar files with REST API
+		for(int ci=0;ci<marFileCnt;ci++) {
+			marFile = strMar[ci].trim()
+
+			script { 
+				String jsonRsp = ""
+				String rspCode = ""
+				String url = """ -X POST "http://${devTestServer}:${svPluginPort}/api/Dcm/VSEs/${vseServer}/actions/deployMar" --header \"Accept: application/vnd.ca.lisaInvoke.virtualService+json\" --header \"Authorization: ${basicAdmin}"  -H \"content-type: multipart/form-data\" -H \"Accept-Encoding: gzip, deflate, br\"  -F file=@${marFile}"""
+				if (isUnix()){
+				// Linux / Mac
+					echo "Linux String url:  $url"
+					def (String response, String code) = sh(script: """curl --silent --write-out \"\n%{http_code}\"  $url """, returnStdout: true).trim().tokenize("\n") 
+					jsonRsp = response;
+					//echo "jsonRsp = " + jsonRsp
+					rspCode = code.toString();
+					//echo "HTTP response status code: $code"
+				}
+				else {
+				// Windows
+					echo "Windows String url:  $url"
+					// Window curl breaks down the return into 3 parts vs Linux 2 parts
+					def (String command, String response, String code) = bat(script: """curl --silent --write-out \"\\n%%{http_code}\" $url""", returnStdout: true).trim().tokenize("""\n""") 
+					echo "command = " + command
+					echo "response = " + response
+					jsonRsp = response;
+					echo "jsonRsp = " + jsonRsp
+					rspCode = code.toString();
+					echo "HTTP response status code: $rspCode"
+				}
+				//Evaluate Response here
+				//echo "rspCode = " + rspCode
+				echo "jsonRsp = " + jsonRsp
+				if (rspCode.toInteger() >= 200 && rspCode.toInteger() < 300) {
+					echo "HTTP response status code: $rspCode"
+				}
+				else {
+				//Fail Here
+					echo "ERROR - HTTP response status code: $rspCode"
+				}
+			}
+			//End Script
+		}
+		//End For
+	}
+//End Stage
+
+
+	parallel(
+		"StageA": {
+		stage('Run Test 1') {
+		// Run CA Application Test using Plugin
+		//svDeployTest host: """${devTestServer}""", marFilePath: """${testFileMar}""", port: """${svPluginPort}""", secured: false, testType: 'tests', tokenCredentialId: """${myCredentialID}""", useCustomRegistry: true
+		// Run CA Application Test using REST API
+			script { 
+				String jsonRsp = ""
+				String rspCode = ""
+				String url = """ -X POST "http://${devTestServer}:${svPluginPort}/lisa-test-invoke/api/v1/tests/run" --header \"Accept: application/json\" --header \"Authorization: ${basicAdmin}\"  -H \"content-type: multipart/form-data\" -F \"file=@${testFileMar}\" -F \"configFile=@${testConfig}\" """
+				if (isUnix()){
+				// Linux / Mac
+					echo "Linux  String url:  $url"
+					def (String response, String code) = sh(script: """curl --silent --write-out \"\n%{http_code}\"  $url """, returnStdout: true).trim().tokenize("\n") 
+					jsonRsp = response;
+					//echo "jsonRsp = " + jsonRsp
+					rspCode = code.toString();
+					//echo "HTTP response status code: $code"
+				}
+				else {
+				// Windows
+					echo "Windows String url:  $url"
+					// Window curl breaks down the return into 3 parts vs Linux 2 parts
+					def (String command, String response, String code) = bat(script: """curl --silent --write-out \"\\n%%{http_code}\" $url""", returnStdout: true).trim().tokenize("""\n""") 
+					//echo "command = " + command
+					//echo "response = " + response
+					jsonRsp = response;
+					//echo "jsonRsp = " + jsonRsp
+					rspCode = code.toString();
+					//echo "HTTP response status code: $rspCode"
+				}
+				if (rspCode.toInteger() >= 200 && rspCode.toInteger() < 300) {
+					echo "HTTP response status code: $rspCode"
+				}
+				else {
+				//Fail Here
+					echo "ERROR - HTTP response status code: $rspCode"
+				
+				}
+
+			}
+			//End Script
+			
+		sleep sleepTimeTest.toInteger() 
+		}
+		},
+	"StageB": {
+		stage('Run Test 2') {
+		// Run CA Application Test using Plugin
+		//svDeployTest host: """${devTestServer}""", marFilePath: """${testFileMar2}""", port: """${svPluginPort}""", secured: false, testType: 'tests', tokenCredentialId: """${myCredentialID}""", useCustomRegistry: true
+		// Run CA Application Test using REST API
+			script { 
+				String jsonRsp = ""
+				String rspCode = ""
+				String url = """ -X POST "http://${devTestServer}:${svPluginPort}/lisa-test-invoke/api/v1/tests/run" --header \"Accept: application/json\" --header \"Authorization: ${basicAdmin}\"  -H \"content-type: multipart/form-data\" -F \"file=@${testFileMar2}\"  -F \"configFile=@${testConfig}\" """
+				if (isUnix()){
+				// Linux / Mac
+					echo "Linux  String url:  $url"
+					def (String response, String code) = sh(script: """curl --silent --write-out \"\n%{http_code}\"  $url """, returnStdout: true).trim().tokenize("\n") 
+					jsonRsp = response;
+					//echo "jsonRsp = " + jsonRsp
+					rspCode = code.toString();
+					//echo "HTTP response status code: $code"
+				}
+				else {
+				// Windows
+					echo "Windows String url:  $url"
+					// Window curl breaks down the return into 3 parts vs Linux 2 parts
+					def (String command, String response, String code) = bat(script: """curl --silent --write-out \"\\n%%{http_code}\" $url""", returnStdout: true).trim().tokenize("""\n""") 
+					//echo "command = " + command
+					//echo "response = " + response
+					jsonRsp = response;
+					//echo "jsonRsp = " + jsonRsp
+					rspCode = code.toString();
+					//echo "HTTP response status code: $rspCode"
+				}
+				if (rspCode.toInteger() >= 200 && rspCode.toInteger() < 300) {
+					echo "HTTP response status code: $rspCode"
+				}
+				else {
+				//Fail Here
+					echo "ERROR - HTTP response status code: $rspCode"
+				
+				}
+			}
+			//End Script
+		
+		sleep sleepTimeTest.toInteger() 
+		}
+		}
+	)
+		stage ("After Test Wait time") {
+		echo """Waiting ${sleepTime} seconds for demo to complete """
+		sleep sleepTimeTest.toInteger() // seconds
+		sleep sleepTimeTest.toInteger() // seconds
+		}
+		
+	stage ("Stop Virtual Service") {
+		sleep sleepTime.toInteger() // seconds
+		//svStopVirtualService host: """${devTestServer}""", port: """${svPluginPort}""", secured: false, tokenCredentialId: """${myCredentialID}""", useCustomRegistry: true, vsNames: """${serviceName}""", vseName: """${vseServer}""" 
+		// Stop Service using REST API
+		
+			for(int vi=0;vi<vsCnt;vi++) {
+				vsName = strVS[vi].trim()
+				//def responseStop = httpRequest httpMode:'POST',  customHeaders: [[name: 'Authorization', value: """${basicAuth}"""]], url: """http://${devTestServer}:${svPluginPort}/api/Dcm/VSEs/${vseServer}/${vsName}/actions/stop"""
+				//echo 'Response Stop= ' + responseStop
+				
+				script { 
+					String jsonRsp = ""
+					String rspCode = ""
+					String url = """ -X POST "http://${devTestServer}:${svPluginPort}/api/Dcm/VSEs/${vseServer}/${vsName}/actions/stop" --header \"Accept: application/vnd.ca.lisaInvoke.virtualService+json\" --header \"Authorization: ${basicAdmin}" """
+					if (isUnix()){
+					// Linux / Mac
+						echo "Linux String url:  $url"
+						def (String response, String code) = sh(script: """curl --silent --write-out \"\n%{http_code}\"  $url """, returnStdout: true).trim().tokenize("\n") 
+						jsonRsp = response;
+						//echo "jsonRsp = " + jsonRsp
+						rspCode = code.toString();
+						//echo "HTTP response status code: $code"
+					}
+					else {
+					// Windows
+						echo "Windows String url:  $url"
+						// Window curl breaks down the return into 3 parts vs Linux 2 parts
+						def (String command, String response, String code) = bat(script: """curl --silent --write-out \"\\n%%{http_code}\" $url""", returnStdout: true).trim().tokenize("""\n""") 
+						echo "command = " + command
+						echo "response = " + response
+						jsonRsp = response;
+						echo "jsonRsp = " + jsonRsp
+						rspCode = code.toString();
+						echo "HTTP response status code: $rspCode"
+					}
+					//Evaluate Response here
+					//echo "rspCode = " + rspCode
+					echo "jsonRsp = " + jsonRsp
+					if (rspCode.toInteger() >= 200 && rspCode.toInteger() < 300) {
+						echo "HTTP response status code: $rspCode"
+					}
+					else {
+					//Fail Here
+						echo "ERROR - HTTP response status code: $rspCode"
+					
+					}
+				}
+				//end script block
+			}
+			// end For block
+	}
+	
+		stage ('UnDeploy Virtual Service(s) from VSE') {
+		sleep sleepTimeTest.toInteger() // seconds
+		//sleep sleepTime.toInteger() // seconds
+		// UnDeploy VS 
+		//svUndeployVirtualService host: """${devTestServer}""", port: """${svPluginPort}""", secured: false, tokenCredentialId: """${myCredentialID}""", useCustomRegistry: true, vsNames: """${serviceName}""", vseName: """${vseServer}"""
+		// Undeploy Service using REST API
+		
+			for(int vi=0;vi<vsCnt;vi++) {
+				vsName = strVS[vi].trim()
+				script { 
+					String jsonRsp = ""
+					String rspCode = ""
+					String url = """ -X DELETE "http://${devTestServer}:${svPluginPort}/api/Dcm/VSEs/${vseServer}/${vsName}" --header \"Accept: application/json\" --header \"Authorization: ${basicAdmin}\" """
+					if (isUnix()){
+					// Linux / Mac
+						//echo "Linux String url:  $url"
+						def (String code) = sh(script: """curl --silent --write-out \"%{http_code}\"  $url """, returnStdout: true).trim().tokenize("\n") 
+						rspCode = code.toString();
+					}
+					else {
+					// Windows
+						//echo "Windows String url:  $url"
+						// Window curl breaks down the return into 3 parts vs Linux 2 parts
+						//For DELETE commands you do not get a response
+						def (String command, String code) = bat(script: """curl --silent --write-out \"\\n%%{http_code}\" $url""", returnStdout: true).trim().tokenize("""\n""") 
+						rspCode = code.toString();
+					}
+					//Evaluate Response here
+					if (rspCode.toInteger() >= 200 && rspCode.toInteger() < 300) {
+						echo "HTTP response status code: $rspCode"
+					}
+					else {
+					//Fail Here
+						echo "ERROR - HTTP response status code: $rspCode"
+					
+					}
+				}
+				//end script block
+			}
+			//end for loop
+		
+		svPublishTestReport()
+		}
+
+	stage('Stop Container VSE') {
+
+		sleep sleepTimeTest.toInteger() // seconds
+        //def rspStartVse = httpRequest consoleLogResponseBody: true, customHeaders: [[maskValue: false, name: 'Content-Type', value: 'application/json']], httpMode: 'POST', responseHandle: 'NONE', url: //"""http://${dockerHost}:${dockerAPIPort}/v1.42/containers/${cId}/stop""", wrapAsMultipart: false
+		//echo 'Response status= ' + rspStartVse.status
+		script { 
+			String jsonRsp = ""
+			String rspCode = ""
+			String url = """ -X POST  -H \"Content-Type: application/json\" -H \"accept: application/json\" "http://${dockerHost}:${dockerAPIPort}/v1.42/containers/${cId}/stop"  """
+			if (isUnix()){
+				// Linux / Mac
+				echo "Linux String url:  $url"
+				//def (String response, String code) = sh(script: """curl --silent --write-out \"\n%{http_code}\" $url""", returnStdout: true).trim().tokenize("\n")
+				def (String response) = sh(script: """curl --silent --write-out \"\n%{http_code}\" $url""", returnStdout: true).trim().tokenize("\n")
+				///echo response
+				rspCode = response;
+			}
+			else {
+				// Windows curl 7.79.1 (Windows) libcurl/7.79.1 Schannel
+				echo "Windows String url:  $url"
+				// Window curl breaks down the return into 3 parts vs Linux 2 parts
+				def (String command, String response) = bat(script: """curl --silent --write-out \"\\n%%{http_code}\" $url """, returnStdout: true).trim().tokenize("""\n""")
+				rspCode = response;
+			}
+			if (rspCode.toInteger() >= 200 && rspCode.toInteger() < 300) {
+				echo "HTTP response status code: $rspCode"
+			}
+			else {
+			//Fail Here
+				echo "ERROR - HTTP response status code: $rspCode"
+			}
+
+		}
+		//End Script
+
+
+	}
+//End Stage
+
+	stage('Remove Container VSE') {
+
+		sleep sleepTime.toInteger() // seconds
+ 		sleep sleepTimeTest.toInteger() // seconds
+       //def rspStartVse = httpRequest consoleLogResponseBody: true, customHeaders: [[maskValue: false, name: 'Content-Type', value: 'application/json']], httpMode: 'DELETE', responseHandle: 'NONE', url: //"""http://${dockerHost}:${dockerAPIPort}/v1.42/containers/${cId}""", wrapAsMultipart: false
+		//echo 'Response status= ' + rspStartVse.status
+				script { 
+					String jsonRsp = ""
+					String rspCode = ""
+					String url = """ -X DELETE "http://${dockerHost}:${dockerAPIPort}/v1.42/containers/${cId}" --header \"Accept: application/json\" --header \"Content-Type: application/json\" """
+					if (isUnix()){
+					// Linux / Mac
+						echo "Linux String url:  $url"
+						def (String code) = sh(script: """curl --silent --write-out \"%{http_code}\"  $url """, returnStdout: true).trim().tokenize("\n") 
+						echo "code: $code "
+						//echo "jsonRsp = " + jsonRsp
+						rspCode = code.toString();
+						//echo "HTTP response status code: $code"
+					}
+					else {
+					// Windows
+						echo "Windows String url:  $url"
+						// Window curl breaks down the return into 3 parts vs Linux 2 parts
+						//For DELETE commands you do not get a response
+						def (String command, String code) = bat(script: """curl --silent --write-out \"\\n%%{http_code}\" $url""", returnStdout: true).trim().tokenize("""\n""") 
+						echo "command = " + command
+						echo "code: $code "
+						//jsonRsp = response;
+						//echo "jsonRsp = " + jsonRsp
+						rspCode = code.toString();
+						//echo "HTTP response status code: $rspCode"
+					}
+					//Evaluate Response here
+					//echo "rspCode = " + rspCode
+					//echo "jsonRsp = " + jsonRsp
+					if (rspCode.toInteger() >= 200 && rspCode.toInteger() < 300) {
+						echo "HTTP response status code: $rspCode"
+					}
+					else {
+					//Fail Here
+						echo "ERROR - HTTP response status code: $rspCode"
+					
+					}
+				}
+				//end script block
+
+
+	}
+//End Stage
+
+
+//End Node
+}
